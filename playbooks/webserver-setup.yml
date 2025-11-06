@@ -1,0 +1,108 @@
+---
+# Ansible Playbook: Web Server Setup
+# Configures Nginx web server with SSL and security hardening
+
+- name: Setup Web Server
+  hosts: webservers
+  become: yes
+  vars:
+    domain_name: "example.com"
+    ssl_email: "admin@example.com"
+    
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: ansible_os_family == "Debian"
+
+    - name: Install required packages
+      package:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+          - ufw
+          - fail2ban
+        state: present
+
+    - name: Configure UFW firewall
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "22"
+        - "80"
+        - "443"
+      notify: restart ufw
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Configure Nginx
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/{{ domain_name }}
+      notify: restart nginx
+
+    - name: Enable Nginx site
+      file:
+        src: /etc/nginx/sites-available/{{ domain_name }}
+        dest: /etc/nginx/sites-enabled/{{ domain_name }}
+        state: link
+      notify: restart nginx
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: restart nginx
+
+    - name: Configure SSL certificate
+      command: >
+        certbot --nginx -d {{ domain_name }} -d www.{{ domain_name }}
+        --non-interactive --agree-tos --email {{ ssl_email }}
+        --redirect
+      args:
+        creates: /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem
+      notify: restart nginx
+
+    - name: Configure fail2ban
+      template:
+        src: jail.local.j2
+        dest: /etc/fail2ban/jail.local
+      notify: restart fail2ban
+
+    - name: Configure Nginx security headers
+      lineinfile:
+        path: /etc/nginx/nginx.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        insertafter: "http {"
+      loop:
+        - { regexp: '^\\s*add_header X-Frame-Options', line: '    add_header X-Frame-Options "SAMEORIGIN" always;' }
+        - { regexp: '^\\s*add_header X-Content-Type-Options', line: '    add_header X-Content-Type-Options "nosniff" always;' }
+        - { regexp: '^\\s*add_header X-XSS-Protection', line: '    add_header X-XSS-Protection "1; mode=block" always;' }
+        - { regexp: '^\\s*add_header Strict-Transport-Security', line: '    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;' }
+      notify: restart nginx
+
+  handlers:
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes
+
+    - name: restart ufw
+      systemd:
+        name: ufw
+        state: restarted
+
+    - name: restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
+        enabled: yes
+

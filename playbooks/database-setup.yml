@@ -1,0 +1,90 @@
+---
+# Ansible Playbook: Database Server Setup
+# Configures MySQL/MariaDB with security hardening
+
+- name: Setup Database Server
+  hosts: databases
+  become: yes
+  vars:
+    db_root_password: "{{ vault_db_root_password }}"
+    db_name: "app_db"
+    db_user: "app_user"
+    db_password: "{{ vault_db_password }}"
+    
+  tasks:
+    - name: Install MariaDB
+      package:
+        name:
+          - mariadb-server
+          - mariadb-client
+          - python3-pymysql
+        state: present
+
+    - name: Start and enable MariaDB
+      systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Set root password
+      mysql_user:
+        name: root
+        password: "{{ db_root_password }}"
+        login_user: root
+        login_password: ""
+        check_implicit_admin: yes
+        state: present
+
+    - name: Remove anonymous users
+      mysql_user:
+        name: ""
+        host_all: yes
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        state: absent
+
+    - name: Remove test database
+      mysql_db:
+        name: test
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        state: absent
+
+    - name: Create application database
+      mysql_db:
+        name: "{{ db_name }}"
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        state: present
+
+    - name: Create application user
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        priv: "{{ db_name }}.*:ALL"
+        login_user: root
+        login_password: "{{ db_root_password }}"
+        state: present
+
+    - name: Configure MariaDB bind address
+      lineinfile:
+        path: /etc/mysql/mariadb.conf.d/50-server.cnf
+        regexp: "^bind-address"
+        line: "bind-address = 127.0.0.1"
+      notify: restart mariadb
+
+    - name: Configure firewall for database
+      ufw:
+        rule: allow
+        port: "3306"
+        proto: tcp
+        from_ip: "{{ item }}"
+      loop: "{{ allowed_db_hosts }}"
+      when: allowed_db_hosts is defined
+
+  handlers:
+    - name: restart mariadb
+      systemd:
+        name: mariadb
+        state: restarted
+
