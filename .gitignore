@@ -1,0 +1,5 @@
+# Ansible
+*.retry
+.vault_pass
+ansible.cfg.local
+*.log
